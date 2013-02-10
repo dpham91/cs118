@@ -34,7 +34,7 @@ int main (int argc, char *argv[])
 	memset(&srvrSockAddr, 0, sizeof(srvrSockAddr));
 	
 	srvrSockAddr.sa_family = AF_INET;
-	srvrSockAddr.sin_port = htons(INADDR_ANY); //listening port
+	srvrSockAddr.sin_port = htonl(INADDR_ANY); //listening port
  	Res = inet_pton(AF_INET, "192.168.1.3", &srvrSockAddr.sin_addr); //set server's socket's address 
 		//may need to change the IP address later; Perhaps add parameter to this function
 
