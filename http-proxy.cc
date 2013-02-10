@@ -15,14 +15,9 @@ using namespace std;
 
 int main (int argc, char *argv[])
 {
-
-
   // command line parsing
 
-
-int connectToServer(){
-
-//-----Create server socket-----
+//-----Create socket for connection to server on client's side (noted as server socket in rest of code)-----
 		//create address structure for TCP connection socket
 	struct sockaddr srvrSockAddr;
 	   //create server socket file descriptor for TCP connection
@@ -39,7 +34,7 @@ int connectToServer(){
 	memset(&srvrSockAddr, 0, sizeof(srvrSockAddr));
 	
 	srvrSockAddr.sa_family = AF_INET;
-	srvrSockAddr.sin_port = htons(13728); //listening port
+	srvrSockAddr.sin_port = htons(INADDR_ANY); //listening port
  	Res = inet_pton(AF_INET, "192.168.1.3", &srvrSockAddr.sin_addr); //set server's socket's address 
 		//may need to change the IP address later; Perhaps add parameter to this function
 
@@ -57,7 +52,7 @@ int connectToServer(){
 		exit(EXIT_FAILURE);
 	}
 	
-//-----Create socket to listen for client(s) request-----
+//-----Create socket to listen for client(s) request on server side (noted as client socket in rest of the code)-----
 	struct sockadd clientSockAddr;
 	int Res;
 	int clientSocketFD = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -72,7 +67,7 @@ int connectToServer(){
 	memset(&clientSockAddr, 0, sizeof(clientSockAddr));
 
 	clientSockAddr.sa_family = AF_INET; //sin_family instead of sa_family on wiki
-	clientSockAddr.sin_port = htons(14805);
+	clientSockAddr.sin_port = htons(13728);
 	clientSockAddr.sin_addr.s_addr = INADDR_ANY; //may need to switch addresses
 		//above statement allows program to work w/o knowing IP address of the machine it was running on
 
@@ -98,7 +93,6 @@ int connectToServer(){
 //-----Accept and connect sockets-----
 	for(;;)
 	{
-
 			//server tries to accept connection from client
 		if( accept(srvrSocketFD, (struct sockaddr *)&clientSockAddr, sizeof(clientSockAddr)) < 0 )
 		{
@@ -108,13 +102,12 @@ int connectToServer(){
 		}
 
 			//client tries connecting to server socket
-		if( connect(clientSocketFD, (struct sockaddr *)&srvrSockAddr, sizeof(srvrSockAddr)) )
+		if( connect(clientSocketFD, (struct sockaddr *)&srvrSockAddr, sizeof(srvrSockAddr)) == -1 )
 		{
 			perror("Error: Failed to connect");
 			close(clientSocketFD);
 			exit(EXIT_FAILURE);
 		}
-		
 		
 			//Perform read write operations here
 		if( shutdown(srvrConnectFD, HUT_RDWR) )
