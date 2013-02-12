@@ -2,6 +2,7 @@
 //http://www.cs.rutgers.edu/~pxk/rutgers/notes/sockets/index.html
 
 #include <iostream>
+#include <sstream>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -11,82 +12,71 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <pthread.h>
 
 using namespace std;
+
+
+//For forking and reading in request
+//http://www.programmersheaven.com/mb/Linux/348344/348344/parallel-processing-using-fork/
+//http://www.yolinux.com/TUTORIALS/ForkExecProcesses.html
+int forkAndRead(void* sockfd)
+{
+        int status;
+        pid_t pid;
+        pid = fork();
+        
+        if(pid == 0)
+        {
+                //read request for each child process
+        }
+
+
+        if(pid < 0) //Error with forking
+        {
+                perror("Error: failed to fork");
+                exit(EXIT_FAILURE);
+        }
+
+        //insert what both parent and child processes do: Read request from client
+}
+
 
 int main (int argc, char *argv[])
 {
   // command line parsing
 
-//-----Create socket for connection to server on client's side (cSockAddr)-----
-	struct sockaddr cSockAddr;
-	int cSocketFD = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); //file descriptor
+//-----Create socket on server side-----
+	struct sockadd_in sSockAddr;
+	int socketFD = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
-		//check for error connecting server socket
-	if( cSocketFD == -1  ) //failed to create socket for TCP connection
-	{
-		perror("Could not create socket");
-		exit(EXIT_FAILURE);
-	}
-
-	   //clear sockAddrTCP cSockAddr structure
-	memset(&cSockAddr, 0, sizeof(cSockAddr));
-	
-	//---initialize socket attributes---
-	cSockAddr.sa_family = AF_INET;
-	
-		//Allowing our OS to assign a port #;
-		// We're a client and we won't be receiving any incoming connections,
-		// so there is no need to specify a port #
-	cSockAddr.sin_port = htonl(INADDR_ANY); 
-		
- 	Res = inet_pton(AF_INET, "192.168.1.3", &crvrSockAddr.sin_addr); //set server's socket's address 
-		//may need to change the IP address later; Perhaps add parameter to this function
-
-		//Check for conversion of IP address error
-	if( Res < 0 )
-	{
-		perror("Error: 1st parameter is not a valid address family");
-		close(cSocketFD);
-		exit(EXIT_FAILURE);
-	}
-	else if( Res == 0 )
-	{
-		perror("Error: A valid IP address was not passed in as the 2nd parameter");
-		close(cSocketFD);
-		exit(EXIT_FAILURE);
-	}
-	
-//-----Create socket to listen for client(s) request on server side (noted as client socket in rest of the code)-----
-	struct sockadd sSockAddr;
-	int Res;
-	int sSocketFD = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-
-		//Check for error creating client socket
-	if( sSocketFD == -1 )
+		//Check for error creating socket
+	if( socketFD == -1 )
 	{
 		perror("Error: Cannot create socket");
 		exit(EXIT_FAILURE);
 	}
 
-	memset(&sSockAddr, 0, sizeof(sSockAddr));
+	memset(&sSockAddr, 0, sizeof(sSockAddr)); //clear sSockAddr
 
-	sSockAddr.sa_family = AF_INET; //sin_family instead of sa_family on wiki
+	sSockAddr.sin_family = AF_INET; //sin_family instead of sa_family on wiki
 	sSockAddr.sin_addr.s_addr = INADDR_ANY; //may need to switch addresses
-	sSockAddr.sin_port = htons(13728);
-		//above statement allows program to work w/o knowing IP address of the machine it was running on
+	sSockAddr.sin_port = htons(13728); //port number used for listening; Change to 14805 later
 
+//-----Create socket for connection to server on client's side (cSockAddr)-----
+	struct sockaddr_in cSockAddr
+	memset(&cSockAddr, 0, sizeof(cSockAddr));
 		
-//-----Bind server socket to listening port-----
-		//&clientSockAddr is the address we bind it to
-	if( bind(sSocketFD, (struct sockaddr *)&sSockAddr, sizeof(sSockAddr)) == -1 )
+//-----Bind server's socket to listening port-----
+	if( bind(socketFD, (struct sockaddr *)&sSockAddr, sizeof(sSockAddr)) == -1 )
 	{
 		perror("Error: Binding failed.");
 		close(sSocketFD);
 		exit(EXIT_FAILURE);
 	}
 
-		//prepare socket to listen for connections from client(s)
+//----prepare server's socket to listen for incoming connections from client(s)
 	if( listen(sSocketFD, 10) == -1 ) //10, because we can queue up to 10 connections
 	{
 		perror("Error: Listen failed.");
@@ -94,36 +84,33 @@ int main (int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
+        int clientFDs[10]; //array for file descriptors of client's we accept;
+                //Note: we can only have up to 10 processes, so we can hold at most 10 FDs
+        
+        int processNum = 0; //indicates processNum
 	
 //-----Accept and connect sockets-----
 	for(;;)
 	{
-			//server tries to accept connection from client
-		if( accept(cSocketFD, (struct sockaddr *)&sSockAddr, sizeof(sSockAddr)) < 0 )
-		{
-			perror("Error: Accept failed");
-			close(cSocketFD);
-			exit(EXIT_FAILURE);
-		}
+		        //server tries to accept connection from client
+                clientFDs[processNum] = accept(socketFD, (struct sockaddr *)&cSockAddr, sizeof(cSockAddr));
 
-			//client tries connecting to server socket
-		if( connect(sSocketFD, (struct sockaddr *)&cSockAddr, sizeof(cSockAddr)) == -1 )
+                        //Check for accept failure
+                if( clientFDs[processNum] < 0 )
 		{
-			perror("Error: Failed to connect");
-			close(sSocketFD);
-			exit(EXIT_FAILURE);
+			perror("Error: accept() failed");
+			continue;
 		}
-		
-		//KC to do: fix below 
-			//Perform read write operations here
-		if( shutdown(cConnectFD, HUT_RDWR) )
-		{
-			perror("Cannot shutdown socket");
-			close(cConnectFD);
-			exit(EXIT_FAILURE);
-		}
-		close(cConnectFD); //after all the reads have been done	
+                
+                forkAndFetch(clientFDs[processNum]);
+                processNum++;
+                if(processNum == 10) //10 processes total, so processNum 0 to 9
+                {
+                        processNum = 0;
+                }
 	}
+
+        close(socketFD);
 
 	return EXIT_SUCCESS;
 }
