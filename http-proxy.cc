@@ -15,23 +15,25 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <pthread.h>
+#include "http-request.h"
 
 using namespace std;
 
-const MAX_THREADS = 10; //maximum number of processes (or threads) we are allowed
+const int MAX_THREADS = 10; //maximum number of processes (or threads) we are allowed
 
-void* readAndParseRequest(void* clientfd)
+void* readAndParseRequest(void* fd)
 {
 	string clientBuffer;
+	int* clientfd = (int*) fd;
 	
 	// Read in the request for parsing. Loop through until we get "\r\n\r\n"
 	while (memmem(clientBuffer.c_str(), clientBuffer.length(), "\r\n\r\n", 4) == NULL)
 	{
 		char buf[1024];
-		if (recv(clientfd, buf, sizeof(buf), 0) < 0)
+		if (recv( *clientfd, buf, sizeof(buf), 0) < 0)
 		{
 			perror("Error: Cannot read request");
-			return -1;
+			break;
 		}
 		clientBuffer.append(buf);
 	}
@@ -53,9 +55,11 @@ void* readAndParseRequest(void* clientfd)
 			clientRes += "400 Bad Request\r\n\r\n";
 		
 		// Send response for the bad request
-		if (send(client_fd, clientRes.c_str(), clientRes.length(), 0) == -1)
+		if (send(*clientfd, clientRes.c_str(), clientRes.length(), 0) == -1)
 			perror("Error: Cannot send request");
-		return;
+			
+			
+		//TODO: Might need to add some sort of return
 	}
 	
 	// HTTP 1.0 needs Connection: close header if not already there
@@ -75,17 +79,19 @@ void* readAndParseRequest(void* clientfd)
 		remoteHost = clientReq.GetHost();
 	
 	//host and port need to be char* to be used in getaddrinfo
-	char* host = remoteHost.c_str();
+	/*const char* host = remoteHost.c_str();
 	unsigned short remotePort = clientReq.GetPort();
 	char port[10];
 	sprintf(port, "%d", remotePort);
-	char* path = (clientReq.GetPath()).c_str();
+	const char* path = (clientReq.GetPath()).c_str();*/
 	
 	//TODO: connect to remote host, get data from remote host, 
 	//cache response, and send response to client
 	
 	//cleanup allocated memory
 	free(formattedReq);
+	
+	return NULL;
 }
 
 int main (int argc, char *argv[])
@@ -93,7 +99,7 @@ int main (int argc, char *argv[])
 	// command line parsing
 	
 	//-----Create socket on server side-----
-	struct sockadd_in sSockAddr;
+	struct sockaddr_in sSockAddr;
 	int socketFD = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	
 	//Check for error creating socket
@@ -107,33 +113,34 @@ int main (int argc, char *argv[])
 	
 	sSockAddr.sin_family = AF_INET; //sin_family instead of sa_family on wiki
 	sSockAddr.sin_addr.s_addr = INADDR_ANY; //may need to switch addresses
-	sSockAddr.sin_port = htons(13728); //port number used for listening; Change to 14805 later
+	sSockAddr.sin_port = htons(13572); //port number used for listening; Change to 14805 later
 	
 	//-----Create socket for connection to server on client's side (cSockAddr)-----
-	struct sockaddr_in cSockAddr
+	struct sockaddr_in cSockAddr;
 	memset(&cSockAddr, 0, sizeof(cSockAddr));
 	
 	//-----Bind server's socket to listening port-----
 	if( bind(socketFD, (struct sockaddr *)&sSockAddr, sizeof(sSockAddr)) == -1 )
 	{
 		perror("Error: Binding failed.");
-		close(sSocketFD);
+		close(socketFD);
 		exit(EXIT_FAILURE);
 	}
 	
 	//----prepare server's socket to listen for incoming connections from client(s)
-	if( listen(sSocketFD, 10) == -1 ) //10, because we can queue up to 10 connections
+	if( listen(socketFD, 10) == -1 ) //10, because we can queue up to 10 connections
 	{
 		perror("Error: Listen failed.");
-		close(sSocketFD);
+		close(socketFD);
 		exit(EXIT_FAILURE);
 	}
 	
 	int clientFDs[10]; //array for file descriptors of client's we accept;
 	//Note: we can only have up to 10 processes, so we can hold at most 10 FDs
 	
-	//pthread_t threads[MAX_THREADS]; //Delete later...
-	int threadNum; //indicates thread number
+	pthread_t threads[MAX_THREADS];
+	int threadNum = 0; //indicates thread number
+	socklen_t sizeCSAddr = sizeof(cSockAddr);
 	
 	//-----Accept and connect sockets-----
 	while(true)
@@ -141,7 +148,7 @@ int main (int argc, char *argv[])
 		//server tries to accept connection from client
 		// accept groups of 10 requests at a time
 		//KC: For your understanding of accept: http://stackoverflow.com/questions/489036/how-does-the-socket-api-accept-function-work
-		clientFDs[threadNum] = accept(socketFD, (struct sockaddr *)&cSockAddr, sizeof(cSockAddr));
+		clientFDs[threadNum] = accept(socketFD, (struct sockaddr *)&cSockAddr, &sizeCSAddr);
 		
 		//Check for accept failure
 		if( clientFDs[threadNum] < 0 )
@@ -152,7 +159,7 @@ int main (int argc, char *argv[])
 		
 		//create new thread
 		//passing clientFDs[threadNum] to the function that will read in the request so it has the specific socket
-		if( pthread_create(&thread, NULL, /*add read in request fnc*/, &clientFDs[threadNum])) //correct usage of &?
+		if( pthread_create(&threads[threadNum], NULL, readAndParseRequest, &clientFDs[threadNum])) //correct usage of &?
 		{
 			perror("Error: Not able to create thread.");
 			exit(EXIT_FAILURE);          
