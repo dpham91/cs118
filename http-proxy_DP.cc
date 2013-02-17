@@ -1,3 +1,4 @@
+
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 //http://www.cs.rutgers.edu/~pxk/rutgers/notes/sockets/index.html
 
@@ -17,25 +18,23 @@
 #include <pthread.h>
 #include "http-request.h"
 #include <map>
-#include <time.h>
 
 using namespace std;
-
 const int MAX_THREADS = 10; //maximum number of processes (or threads) we are allowed
-
 std::map<string,string> cache;
-bool CheckCache(string URL);
-string getResponse(char* request,string remoteHost, unsigned short remotePort, string version, size_t length);
 
-void* readAndParseRequest(void* fd)
+bool CheckCache(string URL);
+string getResponse(char* request, int socketFd,size_t length);
+
+void* readAndWrite(void* fd)
 {
 	string clientBuffer;
 	int* clientfd = (int*) fd;
 	
 	// Read in the request for parsing. Loop through until we get "\r\n\r\n"
-	while (memmem(clientBuffer.c_str(), clientBuffer.length(), "\r\n\r\n", 4) == NULL)
+	do
 	{
-		char buf[1024];
+		char buf[1024]; //initialize a new buffer to read in
 		if (recv( *clientfd, buf, sizeof(buf), 0) < 0)
 		{
 			perror("Error: Cannot read request");
@@ -43,8 +42,10 @@ void* readAndParseRequest(void* fd)
 		}
 		clientBuffer.append(buf);
 	}
-	
-	//Parse the request using the given parsing library found in http-request.cc
+	while (memmem(clientBuffer.c_str(), clientBuffer.length(),"\r\n\r\n",   4) == NULL); //TODO: Check if this is being called correcly
+		//http://www.thinkage.ca/english/gcos/expl/c/lib/memmem.html
+
+		//Parse the request using the given parsing library found in http-request.cc
 	HttpRequest clientReq;
 	try {
 		clientReq.ParseRequest(clientBuffer.c_str(), clientBuffer.length());
@@ -63,95 +64,181 @@ void* readAndParseRequest(void* fd)
 		// Send response for the bad request
 		if (send(*clientfd, clientRes.c_str(), clientRes.length(), 0) == -1)
 			perror("Error: Cannot send request");
-		
+					
 		//TODO: Might need to add some sort of return
 	}
 	
 	// HTTP 1.0 needs Connection: close header if not already there
-	if(clientReq.GetVersion() == "1.0")
+	string version = clientReq.GetVersion();
+	if( version == "1.0")
 		clientReq.ModifyHeader("Connection", "close");
 	
-	// extra one for \0
-	size_t requestLength = clientReq.GetTotalLength() + 1;
-	char *formattedReq = (char *) malloc(requestLength);
-	formattedReq = clientReq.FormatRequest(formattedReq);
+	//get url path
+	string path = clientReq.GetPath();
 	
-	// If host not specificed then find in the headers
-	string remoteHost;
-	if (clientReq.GetHost().length() == 0)
-		remoteHost = clientReq.FindHeader("Host");
-	else
-		remoteHost = clientReq.GetHost();
+	string response = ""; //response string to send back
 	
-	//TODO: connect to remote host, get data from remote host, 
-	//cache response, and send response to client
-	
-	string URL = clientReq.GetPath();
-	string response;
-	//Expires Header is not empty so we need to put it in the cache.
-	if (clientReq.FindHeader("Expires") != "")
+	//call check cache function
+	if( CheckCache(path) )
 	{
-		//We first check to see ift he response is already in the cache.
-		if (!checkcache(URL))
-		{response = cache[URL];}
+		response = cache[path];
+	}
+	else //if not in cache, get from server
+	{		
+			//format request to send to server
+		size_t requestLength = clientReq.GetTotalLength() + 1;// extra one for \0
+		char *formattedReq = (char *) malloc(requestLength);
+		formattedReq = clientReq.FormatRequest(formattedReq);
+
+			// If host not specificed then find in the headers
+		string remoteHost;
+		if (clientReq.GetHost().length() == 0)
+			remoteHost = clientReq.FindHeader("Host");
 		else
-			response = getResponse(formattedReq,remoteHost,clientReq.GetPort(),clientReq.GetVersion(), requestLength);
+			remoteHost = clientReq.GetHost();
+		
+			//host and port need to be char* to be used in getaddrinfo
+		const char* host = remoteHost.c_str();
+		unsigned short remotePort = clientReq.GetPort();
+		char port[10];
+		sprintf(port, "%d", remotePort);
+		//const char* path = (clientReq.GetPath()).c_str();
+		
+		struct addrinfo hints, *res;
+		int toServerFD; //socket between proxy and server
+
+		memset(&hints, 0, sizeof hints);
+		hints.ai_family = AF_UNSPEC;
+		hints.ai_socktype = SOCK_STREAM;
+
+		if(getaddrinfo(host, port, &hints, &res)!=0)
+                  //	return "400 - Bad Request\n\n";
+                  return NULL;
+			//create socket and connect
+		toServerFD = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+		if (toServerFD < 0){
+			cerr << "ERROR: Cannot create socket."<< endl;
+		}
+
+		if (connect(toServerFD,res->ai_addr, res->ai_addrlen) < 0) {
+			cerr << "ERROR: Cannot connect." << endl;
+		}
+		
+		//TODO: Add the call of the get response function passing in toServerFD file descriptor
+                response = getResponse(formattedReq,toServerFD,requestLength);
+		
+		if(version == "1.0" /*or server header has close connection*/){ //close socket if HTTP/1.0 and reconnect
+			close(toServerFD);
+		
+			toServerFD = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+			if (toServerFD < 0){
+				cerr<<"ERROR, cannot create socket"<<endl;
+			}
+
+			if (connect(toServerFD,res->ai_addr, res->ai_addrlen) < 0) {
+				cerr<<"ERROR, cannot connect"<<endl;
+			}
+				
+		}
+	       
+		cache[path] = response;
 	}
-	else
+        if(send(*clientfd,response.c_str(),response.length(),0) == -1)
+                {
+                  perror("Error: Cannot send");
+                  exit(EXIT_FAILURE);
+                }
+/*
+		//write and send request
+	char *recBuf = new char [1024];
+	if(write(HTTPsockfd, sendBuf, requestLength)<0)
+		cerr<<"Error: Cannot write to socket."<<endl;
+
+
+		//read in response
+	int canRead;
+	string message;
+	do
 	{
-		response = getResponse(formattedReq,host,port);
-	}
+		bzero((char *)recBuf, sizeof(recBuf));
+		canRead=read(HTTPsockfd, recBuf, sizeof(recBuf)-1);
+		if (canRead<0)
+			cerr<<"Error: Cannot read"<<endl;
+
+		message+=recBuf;
+
+	}while(canRead>0);
+
+	//store "message" value in cache
+		
+
+		//Clean up
+	freeaddrinfo(res);
+	delete [] sendBuf;
+	delete [] recBuf;
+	close(HTTPsockfd);
 	
-	if (send(clientfd, response.c_str(), response.length(), 0) == -1)
-	{
-		perror("send");
-		free(formattedReq);
-		exit(EXIT_FAILURE);
-	}
+	return message;
 	
 	//cleanup allocated memory
 	free(formattedReq);
-	
+*/
 	return NULL;
+	
 }
 
-string getResponse(char* request,string remoteHost, unsigned short remotePort, string version, size_t length)
+//Checks cache to see if URL is already stored, and whether it's expired
+bool CheckCache(string URL)
 {
-	//get address of url
-	struct addrinfo addr, *res;
-	memset(&addr, 0, sizeof(addr));
-	addr.ai_family = AF_NET;
-	addr.ai_socktype = SOCK_STREAM;
-	
-	//host and port need to be char* to be used in getaddrinfo
-	const char* host = remoteHost.c_str();
-	char port[10];
-	sprintf(port, "%d", remotePort);
-	
-	if (getaddrinfo(host, port, &addr, &res) != 0) {
-        return "HTTP/" + version + " 400 Bad Requestr\n\r\n";
+	//iterate through the map container to find the URL
+  std::map<string,string>::const_iterator found = cache.find(URL);
+
+	//if  not found, return false
+	if (found == cache.end())
+	{return false;}
+	else  //check to see if the cached URL has expired or not
+	{/*
+	if (cache[URL].findHeader("Expire")== "")
+	{return true;}
+		else
+		{
+		struct tm tm;
+
+		time_t t;
+		time_t currenttime;
+		const char* date = cache[URL].findHeader("Expire");
+	 
+		if (strptime(date, "%a, %d %b %Y %H:%M:%S %Z", &tm) != NULL)
+			{
+				t = mktime(&tm);
+			   currenttime = time(NULL);
+				if (t < currenttime)
+				{
+					cache.erase(URL);
+					return true;
+				}
+				else
+				{
+					return false;
+				}
+			}
+		}
+	git streturn false;
 	}
-	
-	int socketFd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-	if( socketFd == -1 )
-	{
-		perror("Error: Cannot create socket");
-		exit(EXIT_FAILURE);
-	}
-	
-	if (connect(socketFd,res->ai_addr, res->ai_addrlen) < 0) {
-		perror("Error: Connect failed");
-		close(socketFd);
-		exit(EXIT_FAILURE);
-	}
-	
+         */return true;}
+}
+
+
+
+
+string getResponse(char* request,int socketFd, size_t length)
+{	
 	if (send(socketFd, request, length, 0) == -1)
     {
 		perror("Error: Send failed");
 		close(socketFd);
 		exit(EXIT_FAILURE);
     }
-	
 	string response;
 	for (;;)
 	{
@@ -171,29 +258,16 @@ string getResponse(char* request,string remoteHost, unsigned short remotePort, s
 			break;
 		
 		// Append the buffer to the response if we got something
-		response.append(res_buf, num_recv);
+		response.append(resBuf, numRecv);
 	}
-	close(socketFd);
 	return response;
 }
 
-bool CheckCache(string URL)
-{
-	std::map<string,string>:const_iterator found = cache.find(URL);
-	if (found == cache.end())
-	{return false;}
-	else
-	{
-		return true;
-	}
-	
-}
 
 
 int main (int argc, char *argv[])
 {
-	// command line parsing
-	
+
 	//-----Create socket on server side-----
 	struct sockaddr_in sSockAddr;
 	int socketFD = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -209,7 +283,7 @@ int main (int argc, char *argv[])
 	
 	sSockAddr.sin_family = AF_INET; //sin_family instead of sa_family on wiki
 	sSockAddr.sin_addr.s_addr = INADDR_ANY; //may need to switch addresses
-	sSockAddr.sin_port = htons(13572); //port number used for listening; Change to 14805 later
+	sSockAddr.sin_port = htons(13553); //port number used for listening; Change to 14805 later
 	
 	//-----Create socket for connection to server on client's side (cSockAddr)-----
 	struct sockaddr_in cSockAddr;
@@ -239,15 +313,23 @@ int main (int argc, char *argv[])
 	socklen_t sizeCSAddr = sizeof(cSockAddr);
 	
 	//-----Accept and connect sockets-----
+	
+	//cout << "Outside while loop" << endl;
 	while(true)
 	{
+		//cout << "Inside while" << endl;
+			
 		//server tries to accept connection from client
 		// accept groups of 10 requests at a time
 		//KC: For your understanding of accept: http://stackoverflow.com/questions/489036/how-does-the-socket-api-accept-function-work
 		clientFDs[threadNum] = accept(socketFD, (struct sockaddr *)&cSockAddr, &sizeCSAddr);
+			//If no connection requests are queued and socket is in nonblocking mode, accept() returns -1
+		
+		//cout << "After accept" << endl;
+		
 		
 		//Check for accept failure
-		if( clientFDs[threadNum] < 0 )
+		if( clientFDs[threadNum] == -1 )
 		{
 			perror("Error: accept() failed");
 			continue;
@@ -255,7 +337,7 @@ int main (int argc, char *argv[])
 		
 		//create new thread
 		//passing clientFDs[threadNum] to the function that will read in the request so it has the specific socket
-		if( pthread_create(&threads[threadNum], NULL, readAndParseRequest, &clientFDs[threadNum])) //correct usage of &?
+		if( pthread_create(&threads[threadNum], NULL, readAndWrite, &clientFDs[threadNum])) //correct usage of &?
 		{
 			perror("Error: Not able to create thread.");
 			exit(EXIT_FAILURE);          
