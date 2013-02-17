@@ -178,17 +178,45 @@ string readAndWrite(void* fd)
 	*/
 }
 
-
+//Checks cache to see if URL is already stored, and whether it's expired
 bool CheckCache(string URL)
 {
+	//iterate through the map container to find the URL
 	std::map:const_iterator found = cache.find(URL);
+
+	//if  not found, return false
 	if (found == cache.end())
 	{return false;}
-	else
+	else  //check to see if the cached URL has expired or not
 	{
-	return true;
-	}
+	if (cache[URL].findHeader(expires)== "")
+	{return true;}
+		else
+		{
+		struct tm tm;
 
+		time_t t;
+		time_t currenttime;
+		const char* date = cache[URL].findHeader(expires);
+	 
+		if (strptime(date, "%a, %d %b %Y %H:%M:%S %Z", &tm) != NULL)
+			{
+				t = mktime(&tm);
+			   currenttime = time(NULL);
+				if (t < currenttime)
+				{
+					cache.erase(URL);
+					return true;
+				}
+				else
+				{
+					return false;
+				}
+			}
+		}
+	return false;
+	}
+	
 }
 
 
