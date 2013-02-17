@@ -16,10 +16,15 @@
 #include <errno.h>
 #include <pthread.h>
 #include "http-request.h"
+#include <map>
 
 using namespace std;
 const int MAX_THREADS = 10; //maximum number of processes (or threads) we are allowed
 std::map<string,string> cache;
+
+string readAndWrite(void* fd);
+bool CheckCache(string URL);
+
 
 string readAndWrite(void* fd)
 {
@@ -37,7 +42,7 @@ string readAndWrite(void* fd)
 		}
 		clientBuffer.append(buf);
 	}
-	while (memmem(clientBuffer.c_str(), "\r\n\r\n", clientBuffer.length(),  4) == NULL) //TODO: Check if this is being called correcly
+	while (memmem(clientBuffer.c_str(), clientBuffer.length(), "\r\n\r\n", 4) == NULL); //TODO: Check if this is being called correcly
 		//http://www.thinkage.ca/english/gcos/expl/c/lib/memmem.html
 
 		//Parse the request using the given parsing library found in http-request.cc
@@ -63,8 +68,12 @@ string readAndWrite(void* fd)
 		//TODO: Might need to add some sort of return
 	}
 	
+	
+	//get Content-length
+	//int content length = (int)(clientReq.FindHeader("Content-Length"));
+	
 	// HTTP 1.0 needs Connection: close header if not already there
-	int version = clientReq.GetVersion();
+	string version = clientReq.GetVersion();
 	if( version == "1.0")
 		clientReq.ModifyHeader("Connection", "close");
 	
@@ -73,8 +82,8 @@ string readAndWrite(void* fd)
 	
 	string response = ""; //response string to send back
 	
-	//call check cache function
-	if( CheckCache(path) )
+	//call check cache function; call CheckCache(path, /*expiration string*/)
+	if( false ) //TODO:Change
 	{
 		response = cache[path];
 	}
@@ -97,7 +106,7 @@ string readAndWrite(void* fd)
 		unsigned short remotePort = clientReq.GetPort();
 		char port[10];
 		sprintf(port, "%d", remotePort);
-		const char* path = (clientReq.GetPath()).c_str();
+		//const char* path = (clientReq.GetPath()).c_str();
 		
 		struct addrinfo hints, *res;
 		int toServerFD; //socket between proxy and server
@@ -106,7 +115,7 @@ string readAndWrite(void* fd)
 		hints.ai_family = AF_UNSPEC;
 		hints.ai_socktype = SOCK_STREAM;
 
-		if(getaddrinfo(host, remotePort, &hints, &res)!=0)
+		if(getaddrinfo(host, port, &hints, &res)!=0)
 			return "400 - Bad Request\n\n";
 
 			//create socket and connect
@@ -121,7 +130,45 @@ string readAndWrite(void* fd)
 		
 		//TODO: Add the call of the get response function passing in toServerFD file descriptor
 		
-		if(version = "1.0" /*or server header has close connection*/){ //close socket if HTTP/1.0 and reconnect
+			//write and send request
+		char *recBuf = new char [1024];
+		char *sendBuf = new char [requestLength+1];
+		if(write(toServerFD, sendBuf, requestLength)<0)
+			cerr<<"Error: Cannot write to socket."<<endl;
+			
+			//read in response
+		int canRead;
+		string message;
+		do
+		{
+			bzero((char *)recBuf, sizeof(recBuf));
+			canRead=read(toServerFD, recBuf, sizeof(recBuf)-1);
+			if (canRead<0)
+				cerr<<"Error: Cannot read"<<endl;
+
+			message+=recBuf;
+
+		}while(canRead>0);
+
+		//store "message" value in cache
+
+			//Clean up
+		freeaddrinfo(res);
+		delete [] sendBuf;
+		delete [] recBuf;
+		//close(HTTPsockfd);
+		
+		response = message;
+		
+		//cleanup allocated memory
+		free(formattedReq);
+		
+		//return NULL;
+		
+			
+		
+		
+		/*if(version = "1.0" or server header has close connection){ //close socket if HTTP/1.0 and reconnect
 			close(toServerFD);
 		
 			toServerFD = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
@@ -133,7 +180,7 @@ string readAndWrite(void* fd)
 				cerr<<"ERROR, cannot connect"<<endl;
 			}
 				
-		}
+		}*/
 		
 		
 		
@@ -176,63 +223,62 @@ string readAndWrite(void* fd)
 	
 	return NULL;
 	*/
+	
+	pthread_exit(NULL);
+
 }
 
 //Checks cache to see if URL is already stored, and whether it's expired
 bool CheckCache(string URL)
 {
 	//iterate through the map container to find the URL
-	std::map:const_iterator found = cache.find(URL);
+	std::map<string, string>::const_iterator found = cache.find(URL);
 
 	//if  not found, return false
 	if (found == cache.end())
-	{return false;}
+	{
+                return false;
+}
 	else  //check to see if the cached URL has expired or not
 	{
-	if (cache[URL].findHeader(expires)== "")
-	{return true;}
-		else
-		{
-		struct tm tm;
-
-		time_t t;
-		time_t currenttime;
-		const char* date = cache[URL].findHeader(expires);
-	 
-		if (strptime(date, "%a, %d %b %Y %H:%M:%S %Z", &tm) != NULL)
-			{
-				t = mktime(&tm);
-			   currenttime = time(NULL);
-				if (t < currenttime)
-				{
-					cache.erase(URL);
-					return true;
-				}
-				else
-				{
-					return false;
-				}
-			}
-		}
-	git streturn false;
+	        if ((cache[URL]).findHeader("Expires")== "")
+	        {
+                        return true;
+                }
+	        else
+	        {
+                	struct tm tm;
+		        time_t t;
+		        time_t currenttime;
+		        const char* date = cache[URL].findHeader(expires);
+	         
+		        if (strptime(date, "%a, %d %b %Y %H:%M:%S %Z", &tm) != NULL)
+		        {
+			        t = mktime(&tm);
+		                currenttime = time(NULL);
+			        if (t < currenttime)
+			        {
+				        cache.erase(URL);
+				        return true;
+			        }
+			        else
+			        {
+				        return false;
+			        }
+		        }
+	        }
+                return false;
 	}
 	
 }
 
-
-
-
-
-
-
 int main (int argc, char *argv[])
 {
-
 	//-----Create socket on server side-----
 	struct sockaddr_in sSockAddr;
 	int socketFD = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	
-	//Check for error creating socket
+		//Check for error creating socket
 	if( socketFD == -1 )
 	{
 		perror("Error: Cannot create socket");
@@ -273,20 +319,13 @@ int main (int argc, char *argv[])
 	socklen_t sizeCSAddr = sizeof(cSockAddr);
 	
 	//-----Accept and connect sockets-----
-	
-	//cout << "Outside while loop" << endl;
 	while(true)
-	{
-		//cout << "Inside while" << endl;
-			
-		//server tries to accept connection from client
-		// accept groups of 10 requests at a time
+	{			
+		//Server tries to accept connection from client.
+		//We can accept groups of 10 clients at a time.
 		//KC: For your understanding of accept: http://stackoverflow.com/questions/489036/how-does-the-socket-api-accept-function-work
 		clientFDs[threadNum] = accept(socketFD, (struct sockaddr *)&cSockAddr, &sizeCSAddr);
 			//If no connection requests are queued and socket is in nonblocking mode, accept() returns -1
-		
-		//cout << "After accept" << endl;
-		
 		
 		//Check for accept failure
 		if( clientFDs[threadNum] == -1 )
@@ -297,7 +336,7 @@ int main (int argc, char *argv[])
 		
 		//create new thread
 		//passing clientFDs[threadNum] to the function that will read in the request so it has the specific socket
-		if( pthread_create(&threads[threadNum], NULL, readAndParseRequest, &clientFDs[threadNum])) //correct usage of &?
+		if( pthread_create(&threads[threadNum], NULL, readAndWrite, &clientFDs[threadNum]))
 		{
 			perror("Error: Not able to create thread.");
 			exit(EXIT_FAILURE);          
@@ -306,10 +345,12 @@ int main (int argc, char *argv[])
 		threadNum++;
 		if(threadNum == MAX_THREADS) //10 processes total, so processNum 0 to 9
 		{
+			pthread_join(); //wait until all 10 threads are done and then accept more clients
 			threadNum = 0;
 		}
 	}
 	
+	pthreads_exit(NULL);
 	close(socketFD);
 	
 	return EXIT_SUCCESS;
