@@ -186,44 +186,6 @@ string readAndWrite(void* fd)
 		
 	}
 	
-/*
-		//write and send request
-	char *recBuf = new char [1024];
-	if(write(HTTPsockfd, sendBuf, requestLength)<0)
-		cerr<<"Error: Cannot write to socket."<<endl;
-
-
-		//read in response
-	int canRead;
-	string message;
-	do
-	{
-		bzero((char *)recBuf, sizeof(recBuf));
-		canRead=read(HTTPsockfd, recBuf, sizeof(recBuf)-1);
-		if (canRead<0)
-			cerr<<"Error: Cannot read"<<endl;
-
-		message+=recBuf;
-
-	}while(canRead>0);
-
-	//store "message" value in cache
-		
-
-		//Clean up
-	freeaddrinfo(res);
-	delete [] sendBuf;
-	delete [] recBuf;
-	close(HTTPsockfd);
-	
-	return message;
-	
-	//cleanup allocated memory
-	free(formattedReq);
-	
-	return NULL;
-	*/
-	
 	pthread_exit(NULL);
 
 }

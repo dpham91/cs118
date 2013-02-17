@@ -42,7 +42,7 @@ string readAndWrite(void* fd)
 		}
 		clientBuffer.append(buf);
 	}
-	while (memmem(clientBuffer.c_str(), "\r\n\r\n", clientBuffer.length(),  4) == NULL) //TODO: Check if this is being called correcly
+	while (memmem(clientBuffer.c_str(), clientBuffer.length(), "\r\n\r\n", 4) == NULL); //TODO: Check if this is being called correcly
 		//http://www.thinkage.ca/english/gcos/expl/c/lib/memmem.html
 
 		//Parse the request using the given parsing library found in http-request.cc
@@ -70,10 +70,10 @@ string readAndWrite(void* fd)
 	
 	
 	//get Content-length
-	int content length = (int)(clientReq.Get
+	//int content length = (int)(clientReq.FindHeader("Content-Length"));
 	
 	// HTTP 1.0 needs Connection: close header if not already there
-	int version = clientReq.GetVersion();
+	string version = clientReq.GetVersion();
 	if( version == "1.0")
 		clientReq.ModifyHeader("Connection", "close");
 	
@@ -82,8 +82,8 @@ string readAndWrite(void* fd)
 	
 	string response = ""; //response string to send back
 	
-	//call check cache function
-	if( CheckCache(path, /*expiration string*/) )
+	//call check cache function; call CheckCache(path, /*expiration string*/)
+	if( false ) //TODO:Change
 	{
 		response = cache[path];
 	}
@@ -106,7 +106,7 @@ string readAndWrite(void* fd)
 		unsigned short remotePort = clientReq.GetPort();
 		char port[10];
 		sprintf(port, "%d", remotePort);
-		const char* path = (clientReq.GetPath()).c_str();
+		//const char* path = (clientReq.GetPath()).c_str();
 		
 		struct addrinfo hints, *res;
 		int toServerFD; //socket between proxy and server
@@ -115,7 +115,7 @@ string readAndWrite(void* fd)
 		hints.ai_family = AF_UNSPEC;
 		hints.ai_socktype = SOCK_STREAM;
 
-		if(getaddrinfo(host, remotePort, &hints, &res)!=0)
+		if(getaddrinfo(host, port, &hints, &res)!=0)
 			return "400 - Bad Request\n\n";
 
 			//create socket and connect
@@ -133,7 +133,7 @@ string readAndWrite(void* fd)
 			//write and send request
 		char *recBuf = new char [1024];
 		char *sendBuf = new char [requestLength+1];
-		if(write(HTTPsockfd, sendBuf, requestLength)<0)
+		if(write(toServerFD, sendBuf, requestLength)<0)
 			cerr<<"Error: Cannot write to socket."<<endl;
 			
 			//read in response
@@ -142,7 +142,7 @@ string readAndWrite(void* fd)
 		do
 		{
 			bzero((char *)recBuf, sizeof(recBuf));
-			canRead=read(HTTPsockfd, recBuf, sizeof(recBuf)-1);
+			canRead=read(toServerFD, recBuf, sizeof(recBuf)-1);
 			if (canRead<0)
 				cerr<<"Error: Cannot read"<<endl;
 
@@ -168,7 +168,7 @@ string readAndWrite(void* fd)
 			
 		
 		
-		/*if(version = "1.0" /*or server header has close connection*//*){ //close socket if HTTP/1.0 and reconnect
+		/*if(version = "1.0" or server header has close connection){ //close socket if HTTP/1.0 and reconnect
 			close(toServerFD);
 		
 			toServerFD = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
@@ -186,44 +186,6 @@ string readAndWrite(void* fd)
 		
 	}
 	
-/*
-		//write and send request
-	char *recBuf = new char [1024];
-	if(write(HTTPsockfd, sendBuf, requestLength)<0)
-		cerr<<"Error: Cannot write to socket."<<endl;
-
-
-		//read in response
-	int canRead;
-	string message;
-	do
-	{
-		bzero((char *)recBuf, sizeof(recBuf));
-		canRead=read(HTTPsockfd, recBuf, sizeof(recBuf)-1);
-		if (canRead<0)
-			cerr<<"Error: Cannot read"<<endl;
-
-		message+=recBuf;
-
-	}while(canRead>0);
-
-	//store "message" value in cache
-		
-
-		//Clean up
-	freeaddrinfo(res);
-	delete [] sendBuf;
-	delete [] recBuf;
-	close(HTTPsockfd);
-	
-	return message;
-	
-	//cleanup allocated memory
-	free(formattedReq);
-	
-	return NULL;
-	*/
-	
 	pthread_exit(NULL);
 
 }
@@ -236,35 +198,38 @@ bool CheckCache(string URL)
 
 	//if  not found, return false
 	if (found == cache.end())
-	{return false;}
+	{
+                return false;
+}
 	else  //check to see if the cached URL has expired or not
 	{
-	if (cache[URL].findHeader(expires)== "")
-	{return true;}
-		else
-		{
-		struct tm tm;
-
-		time_t t;
-		time_t currenttime;
-		const char* date = cache[URL].findHeader(expires);
-	 
-		if (strptime(date, "%a, %d %b %Y %H:%M:%S %Z", &tm) != NULL)
-			{
-				t = mktime(&tm);
-			   currenttime = time(NULL);
-				if (t < currenttime)
-				{
-					cache.erase(URL);
-					return true;
-				}
-				else
-				{
-					return false;
-				}
-			}
-		}
-	return false;
+	        if ((cache[URL]).findHeader("Expires")== "")
+	        {
+                        return true;
+                }
+	        else
+	        {
+                	struct tm tm;
+		        time_t t;
+		        time_t currenttime;
+		        const char* date = cache[URL].findHeader(expires);
+	         
+		        if (strptime(date, "%a, %d %b %Y %H:%M:%S %Z", &tm) != NULL)
+		        {
+			        t = mktime(&tm);
+		                currenttime = time(NULL);
+			        if (t < currenttime)
+			        {
+				        cache.erase(URL);
+				        return true;
+			        }
+			        else
+			        {
+				        return false;
+			        }
+		        }
+	        }
+                return false;
 	}
 	
 }
