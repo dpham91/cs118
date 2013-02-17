@@ -197,7 +197,7 @@ bool CheckCache(string URL)
 	if (found == cache.end())
 	{return false;}
 	else  //check to see if the cached URL has expired or not
-	{/*
+	{
 	if (cache[URL].findHeader("Expire")== "")
 	{return true;}
 		else
@@ -223,9 +223,8 @@ bool CheckCache(string URL)
 				}
 			}
 		}
-	git streturn false;
+	return false;
 	}
-         */return true;}
 }
 
 
