@@ -22,11 +22,12 @@ using namespace std;
 const int MAX_THREADS = 10; //maximum number of processes (or threads) we are allowed
 std::map<string,string> cache;
 
-string readAndWrite(void* fd);
+void* readAndWrite(void* fd);
 bool CheckCache(string URL);
+string getResponse(char* request,int socketFd, size_t length);
 
 
-string readAndWrite(void* fd)
+void* readAndWrite(void* fd)
 {
 	string clientBuffer;
 	int* clientfd = (int*) fd;
@@ -116,7 +117,7 @@ string readAndWrite(void* fd)
 		hints.ai_socktype = SOCK_STREAM;
 
 		if(getaddrinfo(host, port, &hints, &res)!=0)
-			return "400 - Bad Request\n\n";
+			//return "400 - Bad Request\n\n";
 
 			//create socket and connect
 		toServerFD = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
@@ -129,6 +130,7 @@ string readAndWrite(void* fd)
 		}
 		
 		//TODO: Add the call of the get response function passing in toServerFD file descriptor
+                response = getResponse(formattedReq,toServerFD,requestLength);
 		
 			//write and send request
 		char *recBuf = new char [1024];
@@ -187,6 +189,7 @@ string readAndWrite(void* fd)
 	}
 	
 	pthread_exit(NULL);
+        return NULL;
 
 }
 
@@ -200,10 +203,10 @@ bool CheckCache(string URL)
 	if (found == cache.end())
 	{
                 return false;
-}
-	else  //check to see if the cached URL has expired or not
+        }
+	/*else  //check to see if the cached URL has expired or not
 	{
-	        if ((cache[URL]).findHeader("Expires")== "")
+	        if ((cache[URL]).FindHeader("Expires")== "")
 	        {
                         return true;
                 }
@@ -212,7 +215,7 @@ bool CheckCache(string URL)
                 	struct tm tm;
 		        time_t t;
 		        time_t currenttime;
-		        const char* date = cache[URL].findHeader(expires);
+		        const char* date = cache[URL].FindHeader(expires);
 	         
 		        if (strptime(date, "%a, %d %b %Y %H:%M:%S %Z", &tm) != NULL)
 		        {
@@ -230,8 +233,42 @@ bool CheckCache(string URL)
 		        }
 	        }
                 return false;
-	}
+	}*/
+        return false;
 	
+}
+
+
+string getResponse(char* request,int socketFd, size_t length)
+{	
+	if (send(socketFd, request, length, 0) == -1)
+            {
+		        perror("Error: Send failed");
+		        close(socketFd);
+		        exit(EXIT_FAILURE);
+            }
+	string response;
+	for (;;)
+	{
+		char resBuf[1024];
+		
+		// Get data from remote
+		int numRecv = recv(socketFd, resBuf, sizeof(resBuf), 0);
+		if (numRecv < 0)
+		{
+			perror("Error: Could not get response");
+			close(socketFd);
+			exit(EXIT_FAILURE);
+		}
+		
+		// If we didn't recieve anything, we hit the end
+		else if (numRecv == 0)
+			break;
+		
+		// Append the buffer to the response if we got something
+		response.append(resBuf, numRecv);
+	}
+	return response;
 }
 
 int main (int argc, char *argv[])
@@ -251,7 +288,7 @@ int main (int argc, char *argv[])
 	
 	sSockAddr.sin_family = AF_INET; //sin_family instead of sa_family on wiki
 	sSockAddr.sin_addr.s_addr = INADDR_ANY; //may need to switch addresses
-	sSockAddr.sin_port = htons(13553); //port number used for listening; Change to 14805 later
+	sSockAddr.sin_port = htons(13554); //port number used for listening; Change to 14805 later
 	
 	//-----Create socket for connection to server on client's side (cSockAddr)-----
 	struct sockaddr_in cSockAddr;
@@ -307,12 +344,12 @@ int main (int argc, char *argv[])
 		threadNum++;
 		if(threadNum == MAX_THREADS) //10 processes total, so processNum 0 to 9
 		{
-			pthread_join(); //wait until all 10 threads are done and then accept more clients
+			//pthread_join(); //wait until all 10 threads are done and then accept more clients
 			threadNum = 0;
 		}
 	}
 	
-	pthreads_exit(NULL);
+	//pthreads_exit(NULL);
 	close(socketFD);
 	
 	return EXIT_SUCCESS;
