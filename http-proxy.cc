@@ -16,10 +16,14 @@
 #include <errno.h>
 #include <pthread.h>
 #include "http-request.h"
+#include <map>
+#include <time.h>
 
 using namespace std;
 
 const int MAX_THREADS = 10; //maximum number of processes (or threads) we are allowed
+
+std::map<string,string> cache;
 
 void* readAndParseRequest(void* fd)
 {
@@ -88,11 +92,39 @@ void* readAndParseRequest(void* fd)
 	//TODO: connect to remote host, get data from remote host, 
 	//cache response, and send response to client
 	
+	string URL = clientReq.Getpath();
+	
+	//Expires Header is not empty so we need to put it in the cache.
+	if (clientReq.FindHeader("Expires") != "")
+	{
+		//We first check to see ift he response is already in the cache.
+		if (!checkcache(URL))
+		{response = cache[URL];}
+		else
+		response = GetResponse(clientReq);
+	}
+	else
+	{
+		response = getresponse(clientReq);
+	}
 	//cleanup allocated memory
 	free(formattedReq);
 	
 	return NULL;
 }
+
+bool CheckCache(string URL)
+{
+	std::map:const_iterator found = cache.find(URL);
+	if (found == cache.end())
+	{return false;}
+	else
+	{
+	return true;
+	}
+
+}
+
 
 int main (int argc, char *argv[])
 {
