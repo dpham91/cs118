@@ -18,18 +18,18 @@
 #include "http-request.h"
 
 using namespace std;
-
 const int MAX_THREADS = 10; //maximum number of processes (or threads) we are allowed
+std::map<string,string> cache;
 
-void* readAndParseRequest(void* fd)
+string readAndWrite(void* fd)
 {
 	string clientBuffer;
 	int* clientfd = (int*) fd;
 	
 	// Read in the request for parsing. Loop through until we get "\r\n\r\n"
-	while (memmem(clientBuffer.c_str(), clientBuffer.length(), "\r\n\r\n", 4) == NULL)
+	do
 	{
-		char buf[1024];
+		char buf[1024]; //initialize a new buffer to read in
 		if (recv( *clientfd, buf, sizeof(buf), 0) < 0)
 		{
 			perror("Error: Cannot read request");
@@ -37,8 +37,10 @@ void* readAndParseRequest(void* fd)
 		}
 		clientBuffer.append(buf);
 	}
-	
-	//Parse the request using the given parsing library found in http-request.cc
+	while (memmem(clientBuffer.c_str(), "\r\n\r\n", clientBuffer.length(),  4) == NULL) //TODO: Check if this is being called correcly
+		//http://www.thinkage.ca/english/gcos/expl/c/lib/memmem.html
+
+		//Parse the request using the given parsing library found in http-request.cc
 	HttpRequest clientReq;
 	try {
 		clientReq.ParseRequest(clientBuffer.c_str(), clientBuffer.length());
@@ -57,46 +59,147 @@ void* readAndParseRequest(void* fd)
 		// Send response for the bad request
 		if (send(*clientfd, clientRes.c_str(), clientRes.length(), 0) == -1)
 			perror("Error: Cannot send request");
-			
-		return NULL;
+					
+		//TODO: Might need to add some sort of return
 	}
 	
 	// HTTP 1.0 needs Connection: close header if not already there
-	if(clientReq.GetVersion() == "1.0")
+	int version = clientReq.GetVersion();
+	if( version == "1.0")
 		clientReq.ModifyHeader("Connection", "close");
 	
-	// extra one for \0
-	size_t requestLength = clientReq.GetTotalLength() + 1;
-	char *formattedReq = (char *) malloc(requestLength);
-	formattedReq = clientReq.FormatRequest(formattedReq);
+	//get url path
+	string path = clientReq.GetPath();
 	
-	// If host not specificed then find in the headers
-	string remoteHost;
-	if (clientReq.GetHost().length() == 0)
-		remoteHost = clientReq.FindHeader("Host");
-	else
-		remoteHost = clientReq.GetHost();
+	string response = ""; //response string to send back
 	
-	//host and port need to be char* to be used in getaddrinfo
-	/*const char* host = remoteHost.c_str();
-	unsigned short remotePort = clientReq.GetPort();
-	char port[10];
-	sprintf(port, "%d", remotePort);
-	const char* path = (clientReq.GetPath()).c_str();*/
+	//call check cache function
+	if( CheckCache(path) )
+	{
+		response = cache[path];
+	}
+	else //if not in cache, get from server
+	{		
+			//format request to send to server
+		size_t requestLength = clientReq.GetTotalLength() + 1;// extra one for \0
+		char *formattedReq = (char *) malloc(requestLength);
+		formattedReq = clientReq.FormatRequest(formattedReq);
+
+			// If host not specificed then find in the headers
+		string remoteHost;
+		if (clientReq.GetHost().length() == 0)
+			remoteHost = clientReq.FindHeader("Host");
+		else
+			remoteHost = clientReq.GetHost();
+		
+			//host and port need to be char* to be used in getaddrinfo
+		const char* host = remoteHost.c_str();
+		unsigned short remotePort = clientReq.GetPort();
+		char port[10];
+		sprintf(port, "%d", remotePort);
+		const char* path = (clientReq.GetPath()).c_str();
+		
+		struct addrinfo hints, *res;
+		int toServerFD; //socket between proxy and server
+
+		memset(&hints, 0, sizeof hints);
+		hints.ai_family = AF_UNSPEC;
+		hints.ai_socktype = SOCK_STREAM;
+
+		if(getaddrinfo(host, remotePort, &hints, &res)!=0)
+			return "400 - Bad Request\n\n";
+
+			//create socket and connect
+		toServerFD = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+		if (toServerFD < 0){
+			cerr << "ERROR: Cannot create socket."<< endl;
+		}
+
+		if (connect(toServerFD,res->ai_addr, res->ai_addrlen) < 0) {
+			cerr << "ERROR: Cannot connect." << endl;
+		}
+		
+		//TODO: Add the call of the get response function passing in toServerFD file descriptor
+		
+		if(version = "1.0" /*or server header has close connection*/){ //close socket if HTTP/1.0 and reconnect
+			close(toServerFD);
+		
+			toServerFD = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+			if (toServerFD < 0){
+				cerr<<"ERROR, cannot create socket"<<endl;
+			}
+
+			if (connect(toServerFD,res->ai_addr, res->ai_addrlen) < 0) {
+				cerr<<"ERROR, cannot connect"<<endl;
+			}
+				
+		}
+		
+		
+		
+	}
 	
-	//TODO: connect to remote host, get data from remote host, 
-	//cache response, and send response to client
+/*
+		//write and send request
+	char *recBuf = new char [1024];
+	if(write(HTTPsockfd, sendBuf, requestLength)<0)
+		cerr<<"Error: Cannot write to socket."<<endl;
+
+
+		//read in response
+	int canRead;
+	string message;
+	do
+	{
+		bzero((char *)recBuf, sizeof(recBuf));
+		canRead=read(HTTPsockfd, recBuf, sizeof(recBuf)-1);
+		if (canRead<0)
+			cerr<<"Error: Cannot read"<<endl;
+
+		message+=recBuf;
+
+	}while(canRead>0);
+
+	//store "message" value in cache
+		
+
+		//Clean up
+	freeaddrinfo(res);
+	delete [] sendBuf;
+	delete [] recBuf;
+	close(HTTPsockfd);
+	
+	return message;
 	
 	//cleanup allocated memory
 	free(formattedReq);
 	
 	return NULL;
+	*/
 }
+
+
+bool CheckCache(string URL)
+{
+	std::map:const_iterator found = cache.find(URL);
+	if (found == cache.end())
+	{return false;}
+	else
+	{
+	return true;
+	}
+
+}
+
+
+
+
+
+
 
 int main (int argc, char *argv[])
 {
-	// command line parsing
-	
+
 	//-----Create socket on server side-----
 	struct sockaddr_in sSockAddr;
 	int socketFD = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -112,7 +215,7 @@ int main (int argc, char *argv[])
 	
 	sSockAddr.sin_family = AF_INET; //sin_family instead of sa_family on wiki
 	sSockAddr.sin_addr.s_addr = INADDR_ANY; //may need to switch addresses
-	sSockAddr.sin_port = htons(13572); //port number used for listening; Change to 14805 later
+	sSockAddr.sin_port = htons(13553); //port number used for listening; Change to 14805 later
 	
 	//-----Create socket for connection to server on client's side (cSockAddr)-----
 	struct sockaddr_in cSockAddr;
@@ -142,15 +245,23 @@ int main (int argc, char *argv[])
 	socklen_t sizeCSAddr = sizeof(cSockAddr);
 	
 	//-----Accept and connect sockets-----
+	
+	//cout << "Outside while loop" << endl;
 	while(true)
 	{
+		//cout << "Inside while" << endl;
+			
 		//server tries to accept connection from client
 		// accept groups of 10 requests at a time
 		//KC: For your understanding of accept: http://stackoverflow.com/questions/489036/how-does-the-socket-api-accept-function-work
 		clientFDs[threadNum] = accept(socketFD, (struct sockaddr *)&cSockAddr, &sizeCSAddr);
+			//If no connection requests are queued and socket is in nonblocking mode, accept() returns -1
+		
+		//cout << "After accept" << endl;
+		
 		
 		//Check for accept failure
-		if( clientFDs[threadNum] < 0 )
+		if( clientFDs[threadNum] == -1 )
 		{
 			perror("Error: accept() failed");
 			continue;
