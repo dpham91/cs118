@@ -13,9 +13,11 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <cstdlib>
 #include <errno.h>
 #include <pthread.h>
 #include "http-request.h"
+#include "http-response.h"
 #include <map>
 
 using namespace std;
@@ -24,15 +26,14 @@ std::map<string,string> cache;
 
 void* readAndWrite(void* fd);
 bool CheckCache(string URL);
-string getResponse(char* request,int socketFd, size_t length);
+string getResponse(char* request,int* socketFd, size_t length);
 
 
 void* readAndWrite(void* fd)
 {
 	string clientBuffer;
 	int* clientfd = (int*) fd;
-	
-	// Read in the request for parsing. Loop through until we get "\r\n\r\n"
+	size_t headerSize;
 	do
 	{
 		char buf[1024]; //initialize a new buffer to read in
@@ -43,9 +44,10 @@ void* readAndWrite(void* fd)
 		}
 		clientBuffer.append(buf);
 	}
-	while (memmem(clientBuffer.c_str(), clientBuffer.length(), "\r\n\r\n", 4) == NULL); //TODO: Check if this is being called correcly
+	while ((headerSize = clientBuffer.find("\r\n\r\n")) == string::npos); //TODO: Check if this is being called correcly
 	//http://www.thinkage.ca/english/gcos/expl/c/lib/memmem.html
-	//cout <<"finished buffer" <<endl;
+	clientBuffer = clientBuffer.substr(0,headerSize+4);
+
 	//Parse the request using the given parsing library found in http-request.cc
 	HttpRequest clientReq;
 	try {
@@ -75,7 +77,8 @@ void* readAndWrite(void* fd)
 	string version = clientReq.GetVersion();
 	if( version == "1.0")
 		clientReq.ModifyHeader("Connection", "close");
-	
+	else
+		clientReq.ModifyHeader("Connection","Keep-Alive");
 	//get url path
 	string path = clientReq.GetPath();
 	
@@ -92,35 +95,7 @@ void* readAndWrite(void* fd)
 		size_t requestLength = clientReq.GetTotalLength() + 1;// extra one for \0
 		char *formattedReq = (char *) malloc(requestLength);
 		clientReq.FormatRequest(formattedReq);
-		// If host not specificed then find in the headers
-		/*//format request to send to server
-		 string req = formattedReq;
-		 //get Content-length
-		 int contentLength = atoi(clientReq.FindHeader("Content-Length").c_str());
-		 if(contentLength > 0)
-		 {
-		 int numRecv = 0;
-		 char reqBuf[1024];
-		 while(true)
-		 {
-		 numRecv += read(*clientfd, reqBuf, sizeof(reqBuf));
-		 if (numRecv < 0)
-		 {
-		 perror("Error: Could not get response");
-		 close(*clientfd);
-		 exit(EXIT_FAILURE);
-		 }
-		 
-		 // If we didn't recieve anything, we hit the end
-		 else if (numRecv >= contentLength)
-		 break;
-		 // Append the buffer to the response if we got something
-		 req.append(reqBuf, numRecv);
-		 }
-		 }
-		 char *newReq = (char *) malloc(requestLength + contentLength);
-		 sprintf(newReq,"%s%s",formattedReq,req.c_str());
-		 */
+		
 		string remoteHost;
 		if (clientReq.GetHost().length() == 0)
 			remoteHost = clientReq.FindHeader("Host");
@@ -150,10 +125,51 @@ void* readAndWrite(void* fd)
 			cerr << "ERROR: Cannot connect." << endl;
 		}
 		//TODO: Add the call of the get response function passing in toServerFD file descriptor
-		response = getResponse( formattedReq, toServerFD,requestLength);
-		
+		response = getResponse( formattedReq, &toServerFD,requestLength);
+		cout <<response << endl;
 		if(send(*clientfd, response.c_str(), response.length(),0)<0)
 			cerr<<"Error: Cannot write to socket."<<endl;
+		
+		/*
+		 
+		 cout << "before" + response << endl;
+		 size_t left = rest.length();
+		 
+		 size_t numLeft = 6;		
+		 if(left >= numLeft)
+		 {  response += rest.substr(0,numLeft);
+		 numLeft = 0;
+		 }
+		 else {
+		 response += rest;
+		 numLeft -= left;
+		 }
+		 
+		 if(numLeft > 0)
+		 {
+		 size_t numRecv = 0;
+		 char reqBuf[1024];
+		 while(true)
+		 {
+		 numRecv = read(socketFd, reqBuf, sizeof(reqBuf));
+		 if (numRecv < 0)
+		 {
+		 perror("Error: Could not get response");
+		 close(socketFd);
+		 exit(EXIT_FAILURE);
+		 }
+		 // If we didn't recieve anything, we hit the end
+		 else if (numRecv >= numLeft)
+		 {
+		 response.append(reqBuf, numLeft);
+		 break;			// Append the buffer to the response if we got something
+		 }
+		 response.append(reqBuf, numRecv);
+		 numLeft -= numRecv;
+		 }
+		 }
+		 
+		 */
 		
 		//store "message" value in cache
 		
@@ -242,28 +258,71 @@ bool CheckCache(string URL)
 }
 
 
-string getResponse(char* request,int socketFd, size_t length)
+string getResponse(char* request,int* socketFd, size_t length)
 {	
-	
-	if (send(socketFd, request, length, 0) == -1)
+	if (send(*socketFd, request, length, 0) == -1)
 	{
 		perror("Error: Send failed");
-		close(socketFd);
+		close(*socketFd);
 		exit(EXIT_FAILURE);
 	}
-	string response;
+	string response,rest;
+	size_t n;
+	//read in headers of response
+	char *buf = new char [1024];	
 	do
 	{
-		char buf[1024]; //initialize a new buffer to read in
-		if (recv( socketFd, buf, sizeof(buf), 0) < 0)
-		{
-			perror("Error: Cannot read request");
-			break;
+		bzero((char*)buf,sizeof(buf));
+		if (recv(*socketFd, buf, sizeof(buf)-1,0)<0){
+			cerr<<"Error on reading request"<<endl;
+			exit(EXIT_FAILURE);
 		}
-		response.append(buf);
+		response+=buf;
+	}while((n=response.find("\r\n\r\n")) == string::npos);
+	rest = response.substr(n+4,response.length()-(n+4));
+	response = response.substr(0,n+4);
+	
+	size_t left = rest.length();
+	HttpResponse resp;
+	resp.ParseResponse(response.c_str(),response.length());
+	string conLength = resp.FindHeader("Content-Length");
+	
+	//add the data portion
+	size_t numLeft = (size_t) atoi(conLength.c_str());	
+	if(left >= numLeft)
+	{  response += rest.substr(0,numLeft);
+		numLeft = 0;
 	}
-	while (memmem(response.c_str(), response.length(), "\r\n\r\n", 4) == NULL); //TODO: Check if this is being called correcly
-	//http://www.thinkage.ca/english/gcos/expl/c/lib/memmem.html
+	else {
+		response += rest;
+		numLeft -= left;
+	}
+	
+	if(numLeft > 0)
+	{
+		size_t numRecv = 0;
+		char reqBuf[1024];
+		while(true)
+		{
+			numRecv = recv(*socketFd, reqBuf, sizeof(reqBuf),0);
+			if (numRecv < 0)
+			{
+				perror("Error: Could not get response");
+				close(*socketFd);
+				exit(EXIT_FAILURE);
+			}
+			// If we didn't recieve anything, we hit the end
+			else if (numRecv >= numLeft)
+			{
+				response.append(reqBuf, numLeft);
+				break;			// Append the buffer to the response if we got something
+			}
+			response.append(reqBuf, numRecv);
+			numLeft -= numRecv;
+		}
+	}	
+	delete [] buf;
+	
 	return response;
 }
 
@@ -284,7 +343,7 @@ int main (int argc, char *argv[])
 	
 	sSockAddr.sin_family = AF_INET; //sin_family instead of sa_family on wiki
 	sSockAddr.sin_addr.s_addr = INADDR_ANY; //may need to switch addresses
-	sSockAddr.sin_port = htons(32132); //port number used for listening; Change to 14805 later
+	sSockAddr.sin_port = htons(44457); //port number used for listening; Change to 14805 later
 	
 	//-----Create socket for connection to server on client's side (cSockAddr)-----
 	struct sockaddr_in cSockAddr;
