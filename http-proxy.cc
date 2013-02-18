@@ -18,39 +18,50 @@
 #include "http-request.h"
 #include <map>
 
+
 using namespace std;
 const int MAX_THREADS = 10; //maximum number of processes (or threads) we are allowed
 std::map<string,string> cache;
 
 void* readAndWrite(void* fd);
 bool CheckCache(string URL);
-string getResponse(char* request,int socketFd, size_t length);
+string getResponse(char* request,int socketFd, size_t length, int contentlength);
 
 
 void* readAndWrite(void* fd)
 {
 	string clientBuffer;
 	int* clientfd = (int*) fd;
+	char* buf = new char[1024]; //initialize a new buffer to read in
+	int readCorrectly;
 	
 	// Read in the request for parsing. Loop through until we get "\r\n\r\n"
 	do
 	{
-		char buf[1024]; //initialize a new buffer to read in
-		if (recv( *clientfd, buf, sizeof(buf), 0) < 0)
+		bzero((char*)buf, sizeof(buf));
+		readCorrectly = recv( *clientfd, buf, sizeof(buf), 0);
+		if ( readCorrectly < 0)
 		{
 			perror("Error: Cannot read request");
 			break;
 		}
 		clientBuffer.append(buf);
+		if(clientBuffer.find("\r\n\r\n") != string::npos){
+			break;
+		}
 	}
-	while (memmem(clientBuffer.c_str(), clientBuffer.length(), "\r\n\r\n", 4) == NULL);
+	while (readCorrectly > 0);
+	//memmem(clientBuffer.c_str(), clientBuffer.length(), "\r\n\r\n", 4) == NULL);
          //TODO: Check if this is being called correcly
 		//http://www.thinkage.ca/english/gcos/expl/c/lib/memmem.html
+		
 
         cout << "Testing print of clientBuffer..." << endl << clientBuffer << endl << "end";
         
 		//Parse the request using the given parsing library found in http-request.cc
 	HttpRequest clientReq;
+	
+	
 	try {
 		clientReq.ParseRequest(clientBuffer.c_str(), clientBuffer.length());
 	}
@@ -74,13 +85,15 @@ void* readAndWrite(void* fd)
 	
 	
 	//get Content-length
-	//int content length = (int)(clientReq.FindHeader("Content-Length"));
+	
+	cout << "content text " << clientReq.FindHeader("content-length") << endl;
+	int ContentLength = 0;//atoi((clientReq.FindHeader("content-length")).c_str());
+	
+	cout << "count length =" << ContentLength << endl;
 	
 	// HTTP 1.0 needs Connection: close header if not already there
 	string version = clientReq.GetVersion();
-
-        cout << "version = " << version << endl;
-
+    cout << "version = " << version << endl;
 	if( version == "1.0")
 		clientReq.ModifyHeader("Connection", "close");
 	
@@ -100,11 +113,11 @@ void* readAndWrite(void* fd)
 		size_t requestLength = clientReq.GetTotalLength() + 1;// extra one for \0
                 string fReqStr;
                 cout << "requestLength = " << requestLength << endl;
-		char *formattedReq = new char[requestLength];//(char *) malloc(requestLength);
-		fReqStr = clientReq.FormatRequest(formattedReq);
+		char *formattedReq = (char *) malloc(requestLength);
+		clientReq.FormatRequest(formattedReq);
+		printf("%s\n", formattedReq);
 
-
-                cout << "fReq Str " << fReqStr << endl;
+        //cout << "fReq Str " << fReqStr << endl;
                // cout << "formattedReq length = " ;
                 /*int fReqSize = strlen(formattedReq);
                 cout << fReqSize << " " << endl;
@@ -135,7 +148,7 @@ void* readAndWrite(void* fd)
 		hints.ai_family = AF_UNSPEC;
 		hints.ai_socktype = SOCK_STREAM;
 
-		if(getaddrinfo(host, port, &hints, &res)!=0)
+		getaddrinfo(host, port, &hints, &res);
 			//return "400 - Bad Request\n\n";
 
                 cout << "res->ai_family = " << res->ai_family << endl;
@@ -158,7 +171,7 @@ void* readAndWrite(void* fd)
                 cout << "I have reached here!" << endl;
 		
 		//TODO: Add the call of the get response function passing in toServerFD file descriptor
-                response = getResponse(formattedReq,toServerFD,requestLength);
+                response = getResponse(formattedReq,toServerFD,requestLength, ContentLength);
 
                 cout << "I have reached after getResponse." << endl;
 
@@ -168,53 +181,10 @@ void* readAndWrite(void* fd)
                 };
                 close(toServerFD); //might need to get rid               
 
+		freeaddrinfo(res);
 		return NULL;
         }
-			//write and send request
-		/*char *recBuf = new char [1024];
-		char *sendBuf = new char [requestLength+1];
-		if(write(toServerFD, sendBuf, requestLength)<0)
-			cerr<<"Error: Cannot write to socket."<<endl;
-		
-                cout << "I have reached pass the write." << endl;
-
-                int lengthOfSendBuf = strlen(sendBuf);
-                cout << "length of sendBuf = " << lengthOfSendBuf << endl;
-                
-			//read in response
-		int canRead;
-		string message;
-		do
-		{
-			bzero((char *)recBuf, sizeof(recBuf));
-			canRead=read(toServerFD, recBuf, sizeof(recBuf)-1);
-			if (canRead<0)
-				cerr<<"Error: Cannot read"<<endl;
-
-			message+=recBuf;
-
-		}while(canRead>0);
-
-                cout << "message = " << message << endl;
-
-		//TODO: store "message" value in cache
-
-			//Clean up
-		freeaddrinfo(res);
-		delete [] sendBuf;
-		delete [] recBuf;
-		//close(HTTPsockfd);
-		
-		response = message;
-		
-		//cleanup allocated memory
-		free(formattedReq);
-		
-		//return NULL;
-		
-			
-		
-		
+	/*
 		if(version = "1.0" or server header has close connection){ //close socket if HTTP/1.0 and reconnect
 			close(toServerFD);
 		
@@ -285,7 +255,7 @@ bool CheckCache(string URL)
 }
 
 
-string getResponse(char* request,int socketFd, size_t length)
+string getResponse(char* request,int socketFd, size_t length, int contentlength)
 {
 
         cout << "I have entered getResponse and socketFd = " << socketFd << endl;
@@ -294,36 +264,34 @@ string getResponse(char* request,int socketFd, size_t length)
             {
 		        perror("Error: Send failed");
 		        close(socketFd);
-		        exit(EXIT_FAILURE);
             }
 
         cout << "get past if in getResponse" << endl;
 	string response;
-	for (;;)
+	
+	int count= 0;
+	int numRecv;
+	do
 	{
-                cout << "get into for loop of getResponse" << endl;
+        cout << "get into for loop of getResponse" << endl;
 		char resBuf[1024];
 		
 		// Get data from remote
-		int numRecv = recv(socketFd, resBuf, sizeof(resBuf), 0);
+		numRecv = recv(socketFd, resBuf, sizeof(resBuf), 0);
                 cout << "numRecv = " << numRecv << endl;
                 cout << "past recv in getResponse" << endl;
 		if (numRecv < 0)
 		{
 			perror("Error: Could not get response");
 			close(socketFd);
-			exit(EXIT_FAILURE);
-		}
-		
-		// If we didn't receive anything, we hit the end
-		else if (numRecv == 0)
-			break;
-		
-		// Append the buffer to the response if we got something
-		response.append(resBuf, numRecv);
-	}
 
-        cout << "response = " << response << endl;
+		}		// Append the buffer to the response if we got something
+		response.append(resBuf, numRecv);
+		
+		count += numRecv;
+		
+	}while (numRecv >0 && count < contentlength);
+
 	return response;
 }
 
@@ -331,39 +299,38 @@ int main (int argc, char *argv[])
 {
 	//-----Create socket on server side-----
 	struct sockaddr_in sSockAddr;
-	int socketFD = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	int socketFD = socket(AF_INET, SOCK_STREAM, 0);
 	
 		//Check for error creating socket
-	if( socketFD == -1 )
+	if( socketFD < 0 )
 	{
 		perror("Error: Cannot create socket");
-		exit(EXIT_FAILURE);
 	}
 	
 	memset(&sSockAddr, 0, sizeof(sSockAddr)); //clear sSockAddr
 	
 	sSockAddr.sin_family = AF_INET; //sin_family instead of sa_family on wiki
 	sSockAddr.sin_addr.s_addr = INADDR_ANY; //may need to switch addresses
-	sSockAddr.sin_port = htons(13690); //port number used for listening; Change to 14805 later
+	sSockAddr.sin_port = htons(13990); //port number used for listening; Change to 14805 later
 	
 	//-----Create socket for connection to server on client's side (cSockAddr)-----
 	struct sockaddr_in cSockAddr;
 	memset(&cSockAddr, 0, sizeof(cSockAddr));
 	
 	//-----Bind server's socket to listening port-----
-	if( bind(socketFD, (struct sockaddr *)&sSockAddr, sizeof(sSockAddr)) == -1 )
+	if( bind(socketFD, (struct sockaddr *)&sSockAddr, sizeof(sSockAddr)) < 0 )
 	{
 		perror("Error: Binding failed.");
 		close(socketFD);
-		exit(EXIT_FAILURE);
+		
 	}
 	
 	//----prepare server's socket to listen for incoming connections from client(s)
-	if( listen(socketFD, 10) == -1 ) //10, because we can queue up to 10 connections
+	if( listen(socketFD, 10) < 0 ) //10, because we can queue up to 10 connections
 	{
 		perror("Error: Listen failed.");
 		close(socketFD);
-		exit(EXIT_FAILURE);
+		
 	}
 	
 	int clientFDs[10]; //array for file descriptors of client's we accept;
@@ -383,7 +350,7 @@ int main (int argc, char *argv[])
 			//If no connection requests are queued and socket is in nonblocking mode, accept() returns -1
 		
 		//Check for accept failure
-		if( clientFDs[threadNum] == -1 )
+		if( clientFDs[threadNum] < -1 )
 		{
 			perror("Error: accept() failed");
 			continue;
@@ -394,7 +361,7 @@ int main (int argc, char *argv[])
 		if( pthread_create(&threads[threadNum], NULL, readAndWrite, &clientFDs[threadNum]))
 		{
 			perror("Error: Not able to create thread.");
-			exit(EXIT_FAILURE);          
+			       
 		}
 		
 		threadNum++;
