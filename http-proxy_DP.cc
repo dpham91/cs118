@@ -47,7 +47,7 @@ void* readAndWrite(void* fd)
 	while ((headerSize = clientBuffer.find("\r\n\r\n")) == string::npos); //TODO: Check if this is being called correcly
 	//http://www.thinkage.ca/english/gcos/expl/c/lib/memmem.html
 	clientBuffer = clientBuffer.substr(0,headerSize+4);
-
+	
 	//Parse the request using the given parsing library found in http-request.cc
 	HttpRequest clientReq;
 	try {
@@ -70,8 +70,6 @@ void* readAndWrite(void* fd)
 		
 		//TODO: Might need to add some sort of return
 	}
-	
-	
 	
 	// HTTP 1.0 needs Connection: close header if not already there
 	string version = clientReq.GetVersion();
@@ -126,59 +124,17 @@ void* readAndWrite(void* fd)
 		}
 		//TODO: Add the call of the get response function passing in toServerFD file descriptor
 		response = getResponse( formattedReq, &toServerFD,requestLength);
-		cout <<response << endl;
 		if(send(*clientfd, response.c_str(), response.length(),0)<0)
 			cerr<<"Error: Cannot write to socket."<<endl;
-		
-		/*
-		 
-		 cout << "before" + response << endl;
-		 size_t left = rest.length();
-		 
-		 size_t numLeft = 6;		
-		 if(left >= numLeft)
-		 {  response += rest.substr(0,numLeft);
-		 numLeft = 0;
-		 }
-		 else {
-		 response += rest;
-		 numLeft -= left;
-		 }
-		 
-		 if(numLeft > 0)
-		 {
-		 size_t numRecv = 0;
-		 char reqBuf[1024];
-		 while(true)
-		 {
-		 numRecv = read(socketFd, reqBuf, sizeof(reqBuf));
-		 if (numRecv < 0)
-		 {
-		 perror("Error: Could not get response");
-		 close(socketFd);
-		 exit(EXIT_FAILURE);
-		 }
-		 // If we didn't recieve anything, we hit the end
-		 else if (numRecv >= numLeft)
-		 {
-		 response.append(reqBuf, numLeft);
-		 break;			// Append the buffer to the response if we got something
-		 }
-		 response.append(reqBuf, numRecv);
-		 numLeft -= numRecv;
-		 }
-		 }
-		 
-		 */
-		
+				
 		//store "message" value in cache
 		
 		//Clean up
 		freeaddrinfo(res);
 		//delete [] sendBuf;
 		//delete [] recBuf;
-		//close(HTTPsockfd);
-		
+		close(toServerFD);
+		close(*clientfd);
 		//response = message;
 		
 		//cleanup allocated memory
@@ -288,6 +244,7 @@ string getResponse(char* request,int* socketFd, size_t length)
 	string conLength = resp.FindHeader("Content-Length");
 	
 	//add the data portion
+	//cout << conLength<< endl;
 	size_t numLeft = (size_t) atoi(conLength.c_str());	
 	if(left >= numLeft)
 	{  response += rest.substr(0,numLeft);
@@ -343,11 +300,17 @@ int main (int argc, char *argv[])
 	
 	sSockAddr.sin_family = AF_INET; //sin_family instead of sa_family on wiki
 	sSockAddr.sin_addr.s_addr = INADDR_ANY; //may need to switch addresses
-	sSockAddr.sin_port = htons(44457); //port number used for listening; Change to 14805 later
+	sSockAddr.sin_port = htons(43215); //port number used for listening; Change to 14805 later
 	
 	//-----Create socket for connection to server on client's side (cSockAddr)-----
 	struct sockaddr_in cSockAddr;
 	memset(&cSockAddr, 0, sizeof(cSockAddr));
+	
+	int yes = 1;
+	if (setsockopt(socketFD, SOL_SOCKET, SO_REUSEADDR, &yes,sizeof(int)) == -1) {
+		perror("setsockopt");
+		exit(1);
+	}
 	
 	//-----Bind server's socket to listening port-----
 	if( bind(socketFD, (struct sockaddr *)&sSockAddr, sizeof(sSockAddr)) == -1 )
@@ -395,7 +358,6 @@ int main (int argc, char *argv[])
 			perror("Error: Not able to create thread.");
 			exit(EXIT_FAILURE);          
 		}
-		//cout << "created" + threadNum <<endl;
 		threadNum++;
 		if(threadNum == MAX_THREADS) //10 processes total, so processNum 0 to 9
 		{
